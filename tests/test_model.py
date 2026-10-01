@@ -45,7 +45,8 @@ def test_transform_roundtrip_and_bounds():
 def test_keeper_satisfies_its_equations():
     cfg = CathodeConfig(Id=2.0, mdot=0.4e-6)
     ne_o, Te_o = np.array([3e20, 7e20, 2e21]), np.array([2.8, 2.4, 2.1])
-    ne_k, Te_k, nn_k = solve_keeper(cfg, ne_o, Te_o)
+    ne_k, Te_k, nn_k, ok = solve_keeper(cfg, ne_o, Te_o)
+    assert np.all(ok)
     A_o, A_k = np.pi * cfg.r_o**2, np.pi * cfg.r_k**2
     # 1a: непрерывность потока Бома
     assert np.allclose(ne_k, ne_o * A_o / A_k * np.sqrt(Te_o / Te_k))

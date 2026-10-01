@@ -1,4 +1,5 @@
 """Связка модели катода и PSO: решение системы уравнений для рабочей точки."""
+import warnings
 from dataclasses import dataclass
 
 import numpy as np
@@ -35,6 +36,7 @@ class Solution:
     details: dict            # все величины модели для каждого из лучших решений
     histories: list          # история J_best по каждому прогону PSO
     n_runs: int = 0          # сколько прогонов PSO было сделано
+    converged: bool = True   # False -> ни один прогон не прошёл порог J_accept
 
     def best(self):
         """Словарь величин лучшего решения (скаляры)."""
@@ -72,13 +74,16 @@ def solve(cfg: CathodeConfig, n_solutions=10, max_runs=40, n_particles=500, n_it
         if sum(r[0] < J_accept for r in runs) >= n_solutions:
             break
     accepted = [r for r in runs if r[0] < J_accept]
-    if not accepted:  # ничего не сошлось — возвращаем лучшее, что есть
+    converged = bool(accepted)
+    if not converged:  # ничего не сошлось — возвращаем лучшее, что есть, с предупреждением
         accepted = [min(runs, key=lambda r: r[0])]
+        warnings.warn(f"PSO не нашёл решения с J < {J_accept} за {len(runs)} прогонов; "
+                      f"лучшее J = {accepted[0][0]:.3g}", RuntimeWarning, stacklevel=2)
     accepted.sort(key=lambda r: r[0])
     X = to_phys(np.array([r[1] for r in accepted]))
     details = evaluate(cfg, X)
     return Solution(cfg=cfg, X=X, J=details["J"], details=details,
-                    histories=[r[2] for r in runs], n_runs=len(runs))
+                    histories=[r[2] for r in runs], n_runs=len(runs), converged=converged)
 
 
 def residual_report(sol: Solution):

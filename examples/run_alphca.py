@@ -34,11 +34,14 @@ KEYS = ["V_tot", "n_ee", "n_ne", "Te_e", "Ts", "n_eo", "n_no", "Te_o", "Tw_o",
 
 def run(currents, flows, pso_kw):
     rows = []
-    for Id in currents:
-        for m in flows:
+    for i, Id in enumerate(currents):
+        for j, m in enumerate(flows):
             t = time.time()
-            sol = solve(CathodeConfig(Id=Id, mdot=m * 1e-6), **pso_kw)
-            row = {"Id": Id, "mdot_mg_s": m, "n_accepted": len(sol.J), "n_runs": sol.n_runs}
+            # свой seed на каждую рабочую точку: точки статистически независимы
+            seed = 1000 * i + j
+            sol = solve(CathodeConfig(Id=Id, mdot=m * 1e-6), seed=seed, **pso_kw)
+            row = {"Id": Id, "mdot_mg_s": m, "n_accepted": len(sol.J), "n_runs": sol.n_runs,
+                   "converged": sol.converged, "keeper_ok": bool(np.all(sol.details["keeper_ok"]))}
             for k in KEYS:
                 row[k + "_mean"], row[k + "_std"] = sol.mean_std(k)
             rows.append(row)

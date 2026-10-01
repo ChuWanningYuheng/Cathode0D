@@ -44,7 +44,7 @@ class CathodeConfig:
     r_o: float = 0.2e-3             # радиус диафрагмы (диаметр 0.4 мм)
     L_o: float = 0.36e-3            # длина канала диафрагмы
     r_k: float = 0.3e-3             # радиус отверстия keeper'а (диаметр 0.6 мм)
-    L_k: float = 2.3e-3             # длина области keeper: зазор 2 мм + отверстие 0.3 мм
+    L_k: float = 0.3e-3             # длина отверстия keeper'а (в статье принято 0.3 мм)
     # --- стенки ---
     Tw_k: float = 800.0             # температура keeper'а, К (задана, как в статье)
     # --- материал эмиттера (LaB6, Гёбель и Кац) ---
@@ -92,12 +92,15 @@ def _keeper_balance(cfg, ne_o, Te_o, Te_k):
     return (prod - loss) / (prod + loss)
 
 
-def solve_keeper(cfg, ne_o, Te_o, Te_lo=0.2, Te_hi=20.0, n_iter=60):
+def solve_keeper(cfg, ne_o, Te_o, Te_lo=0.2, Te_hi=10.0, n_iter=60):
     """Решает систему (1a-1c) для keeper'а векторной бисекцией по ln(Te_k).
 
-    Невязка 1b монотонно растёт с Te_k (ионизация растёт экспоненциально),
-    поэтому корень единственен. Если корня в [Te_lo, Te_hi] нет, берётся граница.
-    Возвращает (ne_k, Te_k, nn_k).
+    В диапазоне [Te_lo, Te_hi] = [0.2, 10] эВ невязка 1b монотонно растёт с Te_k
+    (K_i растёт экспоненциально; фит K_i имеет максимум при ~15 эВ, поэтому выше
+    10 эВ его не используем), и корень единственен. Если корня нет (например,
+    плазма "съела" всё давление и n_nk < 0), Te_k прилипает к границе, а флаг
+    ``ok`` равен False.
+    Возвращает (ne_k, Te_k, nn_k, ok).
     """
     ne_o, Te_o = np.broadcast_arrays(np.asarray(ne_o, float), np.asarray(Te_o, float))
     lo = np.full(ne_o.shape, np.log(Te_lo))
@@ -110,7 +113,8 @@ def solve_keeper(cfg, ne_o, Te_o, Te_lo=0.2, Te_hi=20.0, n_iter=60):
         hi = np.where(neg, hi, mid)
     Te_k = np.exp(0.5 * (lo + hi))
     ne_k, nn_k = _keeper_fields(cfg, ne_o, Te_o, Te_k)
-    return ne_k, Te_k, nn_k
+    ok = (np.abs(_keeper_balance(cfg, ne_o, Te_o, Te_k)) < 1e-6) & (nn_k > 0)
+    return ne_k, Te_k, nn_k, ok
 
 
 # ---------------------------------------------------------------------------
@@ -193,7 +197,7 @@ def evaluate(cfg: CathodeConfig, X):
     eps_press_e = _rel(p_e, p_taunay)           # 9d
 
     # ---------------- Keeper, ур. 1 ----------------
-    ne_k, Te_k, nn_k = solve_keeper(cfg, ne_o, Te_o)
+    ne_k, Te_k, nn_k, keeper_ok = solve_keeper(cfg, ne_o, Te_o)
 
     # ---------------- Напряжение разряда ----------------
     # "отношение поглощённой мощности к току разряда" (раздел 3.3): вся мощность,
@@ -203,17 +207,23 @@ def evaluate(cfg: CathodeConfig, X):
 
     eps = np.stack([eps_I, eps_Pow_e, eps_ion_e, eps_press_e,
                     eps_Pow_o, eps_ion_o, eps_press_o])
-    eps = np.where(np.isfinite(eps), eps, 1.0)
+    finite = np.all(np.isfinite(eps), axis=0)  # False -> в точке получился NaN/inf
+    eps = np.where(np.isfinite(eps), eps, 1.0)  # NaN/inf -> максимальный штраф
     J = np.sum(np.abs(eps), axis=0)                                             # ур. 22
     if cfg.V_target is not None:
-        J = J + np.abs(V_tot - cfg.V_target) / cfg.V_target                    # ур. 29
-    # Эффективная длина эмиссии не может превышать длину эмиттера
+        # ур. 29; в статье член размерный (В), здесь он отнесён к V_target,
+        # чтобы иметь тот же вес, что и остальные относительные невязки
+        J = J + np.abs(V_tot - cfg.V_target) / cfg.V_target
+    # Эффективная длина эмиссии не может превышать длину эмиттера. При границах
+    # таблицы 1 (Leff <= 6 мм = L_e) штраф не срабатывает; он страхует случай,
+    # когда пользователь задал более широкие границы Leff.
     J = J + np.maximum(Leff - cfg.L_e, 0.0) / cfg.L_e
 
     out = dict(zip(RESIDUAL_NAMES, eps))
     out.update(J=J, V_tot=V_tot, P_abs=P_abs, V_ds=V_ds, R_e=R_e, R_o=R_o,
                j_em=j_em, j_er=j_er, j_i_e=ji_e, I_em=j_em*A_eff, I_ion_o=ndot_ion_o,
                p_e=p_e, p_taunay=p_taunay, p_o=p_o,
-               n_ek=ne_k, Te_k=Te_k, n_nk=nn_k, Tw_k=np.full_like(J, cfg.Tw_k))
+               n_ek=ne_k, Te_k=Te_k, n_nk=nn_k, Tw_k=np.full_like(J, cfg.Tw_k),
+               keeper_ok=keeper_ok, finite=finite)
     out.update(s)
     return out
